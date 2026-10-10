@@ -322,7 +322,7 @@ test('an ordinary serve physically bounces on both halves before the receiver ma
       assert.equal(h.game.snapshot().serveSide, server);
       serveReady(h,); let sawOwnBounce = false, received = null;
       const trace = [];
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 130; i++) {
         h.step(16); const snapshot = h.game.snapshot();
         if (snapshot.ball.serveStage === 2) sawOwnBounce = true;
         if (snapshot.ball.serveStage === 0 && snapshot.ball.receiverBounces === 1) { received = snapshot; break; }
@@ -342,7 +342,7 @@ test('the practice opponent can return a real legal serve instead of a scripted 
   Math.random = () => 0.5;
   try {
     h.game.setDifficulty('hard'); h.game.start(); serveReady(h,);
-    for (let i = 0; i < 110 && h.game.snapshot().rally === 0; i++) h.step(16);
+    for (let i = 0; i < 160 && h.game.snapshot().rally === 0; i++) h.step(16);
     const result = h.game.snapshot();
     assert.ok(result.rally >= 1, 'the practice opponent must be able to return the initial serve');
     assert.equal(result.ball.lastHitter, 1);
@@ -357,7 +357,7 @@ test('the practice opponent return clears the net and lands on the human half', 
     try {
       h.game.setDifficulty(difficulty); h.game.start(); serveReady(h,);
       let crossed = false, landed = false;
-      for (let i = 0; i < 220; i++) {
+      for (let i = 0; i < 300; i++) {
         h.step(16); const snapshot = h.game.snapshot();
         if (snapshot.ball.lastHitter === 1 && snapshot.rally >= 1) {
           crossed ||= snapshot.ball.netCrossed;
@@ -378,7 +378,7 @@ test('brushing to serve after moving the racket forward still starts a legal two
     h.pointer('pointerdown', 500, 470, 2); h.advance(60); h.pointer('pointermove', 500, 440, 2);
     assert.equal(h.game.snapshot().phase, 'playing', 'a brush should serve while the finger is still down');
     let received = false;
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 130; i++) {
       h.step(16); const snapshot = h.game.snapshot();
       if (snapshot.ball.serveStage === 0 && snapshot.ball.receiverBounces === 1) { received = true; break; }
       assert.deepEqual(snapshot.score, [0, 0], 'moving the racket forward must not make the automatic serve illegal');
@@ -786,7 +786,7 @@ test('the initial one-second protection rejects direct serves and protected mous
   }
 });
 
-test('a point holds its result for 1.5 seconds, then gives one second to prepare without auto-serving', () => {
+test('a point keeps the outgoing ball moving briefly, then prepares the next serve without a long blank pause', () => {
   const h = harness();
   try {
     h.game.serve();
@@ -795,10 +795,17 @@ test('a point holds its result for 1.5 seconds, then gives one second to prepare
     assert.deepEqual(state.score, [0, 1]);
     assert.equal(state.pointDelayMs, POINT_BREAK_MS);
     assert.equal(state.serveDelayMs, POINT_BREAK_MS + SERVE_PROTECTION_MS);
-    assert.equal(state.ball.visible, false, 'next serve ball must not pop up at the instant of scoring');
+    assert.equal(state.ball.visible, true, 'the outgoing ball stays visible');
+    assert.ok(state.ball.height < 0, 'the outgoing ball must not be parked at serve height');
+    const outgoing = { ...state.ball };
+    h.settle(300);
+    assert.notEqual(h.game.snapshot().ball.height, outgoing.height, 'the failed ball must continue its physical fall/bounce');
+    assert.deepEqual(h.game.snapshot().score, [0, 1], 'the visual continuation cannot score twice');
+    state = h.game.snapshot();
     h.game.serve({ brushY: -2 }, 0); assert.equal(h.game.snapshot().phase, 'ready');
     h.advance(state.pointDelayMs - 2); h.step(1);
-    assert.equal(h.game.snapshot().ball.visible, false);
+    assert.equal(h.game.snapshot().ball.visible, true);
+    assert.notEqual(h.game.snapshot().ball.y, 738, 'the failed ball is not replaced before its tail ends');
     h.step(1); state = h.game.snapshot();
     assert.equal(state.pointDelayMs, 0); assert.equal(state.ball.visible, true);
     assert.equal(state.serveDelayMs, SERVE_PROTECTION_MS);
@@ -816,10 +823,10 @@ test('holding a finger through a point cannot reuse the old stroke but allows a 
   try {
     h.game.serve(); h.pointer('pointerdown', 500, 650);
     setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
-    h.advance(1200); h.pointer('pointermove', 500, 550);
-    h.advance(1000); h.pointer('pointermove', 500, 450);
+    h.advance(400); h.pointer('pointermove', 500, 550);
+    h.advance(700); h.pointer('pointermove', 500, 450);
     assert.equal(h.game.snapshot().phase, 'ready');
-    h.advance(400); h.pointer('pointermove', 500, 500);
+    h.advance(500); h.pointer('pointermove', 500, 500);
     assert.equal(h.game.snapshot().phase, 'ready');
     h.advance(40); h.pointer('pointermove', 500, 492);
     assert.equal(h.game.snapshot().phase, 'playing');
@@ -870,7 +877,52 @@ test('practice AI also respects the point break and serve protection', () => {
       setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
     }
     assert.equal(h.game.snapshot().serveSide, 1);
-    h.settle(2400); assert.equal(h.game.snapshot().phase, 'ready');
-    h.settle(500); assert.equal(h.game.snapshot().phase, 'playing');
+    h.settle(POINT_BREAK_MS + SERVE_PROTECTION_MS - 100); assert.equal(h.game.snapshot().phase, 'ready');
+    h.settle(200); assert.equal(h.game.snapshot().phase, 'playing');
   } finally { h.close(); }
+});
+
+test('strong spin serves stay legal across brush strengths, at either end of the table', () => {
+  for (const side of [0, 1]) for (const brush of [-8, -1, -0.3, -0.03, 0.03, 0.3, 1, 8]) {
+    const h = harness();
+    try {
+      if (side === 1) for (let i = 0; i < 2; i++) {
+        serveReady(h); setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
+      }
+      serveReady(h, { brushY: brush }, side);
+      const b = { ...h.game.snapshot().ball }, bounces = [];
+      assert.ok(Math.abs(b.spinX) >= 80);
+      if (Math.abs(brush) === 8) assert.ok(Math.abs(b.spinX) >= 500, 'a full brush must create a heavily spinning serve');
+      for (let i = 0; i < 400 && bounces.length < 2; i++) {
+        for (const e of stepBallFlight(b, 1 / 240)) {
+          assert.notEqual(e.type, 'net', `strong serve ${brush} from side ${side} must clear the net`);
+          if (e.type === 'table') bounces.push(e.side);
+        }
+      }
+      assert.deepEqual(bounces, [side, 1 - side]);
+    } finally { h.close(); }
+  }
+});
+
+test('guest keeps predicting a failed ball during its visible tail and then resets to the next serve', () => {
+  let ending, next;
+  const host = harness();
+  try {
+    host.game.serve();
+    setIncoming(host, { x: 100, y: 500, height: 0.01, vy: -200, vx: 80, vh: -1, lastHitter: 0, receiverBounces: 0 }); host.step(16);
+    ending = host.game.snapshot();
+    assert.equal(ending.phase, 'ready'); assert.ok(ending.pointDelayMs > 0);
+    host.advance(ending.pointDelayMs + 1); host.step(1); next = host.game.snapshot();
+  } finally { host.close(); }
+  const guest = harness('guest');
+  try {
+    guest.game.applySnapshot(ending); guest.step(16);
+    const first = { ...guest.state.ball };
+    guest.step(40);
+    assert.ok(guest.state.ball.visible); assert.notEqual(guest.state.ball.y, first.y, 'guest must not freeze the failed ball between snapshots');
+    assert.deepEqual(guest.game.snapshot().score, ending.score);
+    guest.game.applySnapshot(next); guest.step(1);
+    assert.equal(guest.state.ball.y, 738); assert.equal(guest.state.ball.height, 0.25);
+    assert.equal(guest.game.snapshot().phase, 'ready');
+  } finally { guest.close(); }
 });

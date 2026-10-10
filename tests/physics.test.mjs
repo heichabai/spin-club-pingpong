@@ -234,3 +234,36 @@ test('a ball departing the face cannot be hit repeatedly, and height is never re
   assert.equal(sweptRacketContact(start, start, paddle(), paddle(), 0), null);
   for (const phase of ['playing', 'paused', 'ready']) close(getBallHeight({ height: 0.37 }, phase, 100), 0.37);
 });
+
+test('bare brushing now creates strong top/back spin and a measurable curved flight', () => {
+  for (const direction of [-1, 1]) {
+    const incoming = ball({ y: 650, height: 0.6, vy: 700, vh: -0.5 });
+    const shot = computeShot(paddle({ gesture: true, vy: direction * 400, tilt: 7 }), 500, 0, 0, incoming);
+    assert.equal(Math.sign(shot.spinX), direction);
+    assert.ok(Math.abs(shot.spinX) > 140, 'an ordinary vertical brush should create pronounced rotation');
+    const spinning = { ...incoming, ...shot }, flat = { ...spinning, spinX: 0, spinY: 0, spinZ: 0 };
+    stepBallFlight(spinning, 0.18); stepBallFlight(flat, 0.18);
+    assert.ok((spinning.height - flat.height) * direction > 0.025, 'the spin must change physical height, not just the rotating mesh');
+    spinning.vh = flat.vh = -2; spinning.vy = flat.vy = -1 / Z_SCALE;
+    bounceOnTable(spinning); bounceOnTable(flat);
+    assert.ok(Math.abs(spinning.vy - flat.vy) > 20, 'the same rotation must also change the table bounce');
+  }
+});
+
+test('a sideways brush bends the flight strongly in opposite directions', () => {
+  for (const direction of [-1, 1]) {
+    const incoming = ball({ y: 650, height: 0.6, vy: 700, vh: -0.5 });
+    const shot = computeShot(paddle({ gesture: true, vx: direction * 800, tilt: 7 }), 500, 0, 0, incoming);
+    assert.ok(Math.abs(shot.spinY) > 90);
+    const spinning = { ...incoming, ...shot }, flat = { ...spinning, spinX: 0, spinY: 0, spinZ: 0 };
+    stepBallFlight(spinning, 0.18); stepBallFlight(flat, 0.18);
+    assert.ok((flat.x - spinning.x) * direction > 5, 'lateral deflection must be caused by rotation rather than launch direction alone');
+  }
+});
+
+test('strong brushing does not amplify an idle block or inject free spin into a stationary paddle', () => {
+  const incoming = ball({ height: RACKET_HEIGHT, vy: 700, vh: -0.5, spinX: 150, spinY: -70 });
+  const normal = computeShot(paddle({ tilt: 7 }), 500, 0, 0, incoming);
+  const assisted = computeShot(paddle({ tilt: 7, gesture: true }), 500, 0, 0, incoming);
+  for (const key of ['vx', 'vy', 'vh', 'spinX', 'spinY', 'spinZ']) close(assisted[key], normal[key]);
+});
