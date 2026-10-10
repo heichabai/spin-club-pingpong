@@ -24,6 +24,12 @@ try {
  await until(()=>guest.reliable.length===0);
  assert.equal(received.filter(x=>x.type==='serve').length,1,'commands must not be duplicated across socket and polling');
  assert.deepEqual(received.find(x=>x.role==='host'&&x.type==='serve').gesture,{brushY:-2},'serve brush must travel in the reliable command, independently of motion updates');
+ // A burst must converge to its newest position without losing a command
+ // placed among the motion packets. Stale positions may be coalesced.
+ const burstStart=performance.now();
+ for(let i=100;i<140;i++){guest.send({type:'input',input:{x:i}});if(i===120)guest.send({type:'pause'})}
+ await until(()=>received.some(x=>x.role==='host'&&x.type==='input'&&x.input.x===139)&&received.filter(x=>x.type==='pause').length===1&&guest.reliable.length===0);
+ assert.ok(performance.now()-burstStart<1000,'a burst must not build a long motion backlog');
  const previousSocket=guest.socket;
  previousSocket.close();
  await until(()=>!guest._socketOpen());
@@ -37,5 +43,5 @@ try {
  const bad=new WebSocket(base.replace(/^http/,'ws')+'/api/live');
  await new Promise((resolve,reject)=>{bad.on('open',()=>bad.send(JSON.stringify({kind:'bind',code,token:oldToken})));bad.on('close',code=>{try{assert.equal(code,1008);resolve()}catch(e){reject(e)}});bad.on('error',reject)});
  const reconnect=new RoomConnection();try {await reconnect.join(code);await until(()=>reconnect._socketOpen());}finally{reconnect.close()}
- console.log(`PASS: actual RoomConnection clients: 30 immediate updates in ${Math.round(duration)}ms, both directions, command ACK/deduplication, socket recovery, token revocation, rejoin`);
+ console.log(`PASS: actual RoomConnection clients: 30 immediate updates in ${Math.round(duration)}ms, bidirectional traffic, 40-position burst with ordered command, ACK/deduplication, socket recovery, token revocation, rejoin`);
 } finally {host.close();guest.close();globalThis.fetch=nativeFetch;delete globalThis.location}

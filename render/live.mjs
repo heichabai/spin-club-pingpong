@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 // The socket carries no token in its URL and never trusts a client-supplied role.
 export function attachLiveRelay(server, POST) {
   const wss=new WebSocketServer({noServer:true,maxPayload:40_000,perMessageDeflate:false});
-  const send=(ws,value)=>{if(ws.readyState===WebSocket.OPEN&&ws.bufferedAmount<65_536)ws.send(JSON.stringify(value))};
+  const send=(ws,value)=>{if(ws.readyState===WebSocket.OPEN&&ws.bufferedAmount<(value.kind==='realtime'?4_096:65_536))ws.send(JSON.stringify(value))};
   const sync=async(auth,mailbox)=>{
     const response=await POST(new Request('http://localhost/api/rooms',{method:'POST',body:JSON.stringify({action:'sync',...auth,...(mailbox?{mailbox}:{})})}));
     const result=await response.json();if(!response.ok)throw new Error('Unauthorized room');return result;
@@ -16,6 +16,7 @@ export function attachLiveRelay(server, POST) {
   });
   wss.on('connection',ws=>{
     let auth=null,role=null,chain=Promise.resolve(),mailbox=null,windowStart=Date.now(),count=0;
+    let latestMotion=null,motionQueued=false;
     const deadline=setTimeout(()=>{if(!auth)ws.close(1008,'Authentication required')},5000);
     ws.alive=true;ws.on('pong',()=>{ws.alive=true});
     ws.on('error',()=>{});
@@ -24,9 +25,19 @@ export function attachLiveRelay(server, POST) {
       if(binary){ws.close(1008,'Text messages required');return}
       if(Date.now()-windowStart>1000){windowStart=Date.now();count=0}
       if(++count>120){ws.close(1008,'Rate limit');return}
+      let packet;
+      try {packet=JSON.parse(raw.toString());if(!packet||typeof packet!=='object')throw Error('Invalid packet')}catch{ws.close(1008,'Invalid packet');return}
+      const motion=packet.kind==='realtime';
+      if(motion){
+        latestMotion=packet;
+        if(motionQueued)return;
+        motionQueued=true;
+      }
       chain=chain.then(async()=>{
+        // Under a burst, replace queued positions with the newest one. Reliable
+        // commands retain their own ordered queue and are never coalesced.
+        if(motion){packet=latestMotion;latestMotion=null;motionQueued=false}
         if(ws.readyState!==WebSocket.OPEN)return;
-        const packet=JSON.parse(raw.toString());
         if(!auth){
           if(packet.kind!=='bind'||typeof packet.code!=='string'||typeof packet.token!=='string')throw Error('Invalid bind');
           const credentials={code:packet.code,token:packet.token};
