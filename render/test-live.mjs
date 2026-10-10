@@ -19,10 +19,11 @@ try {
  await until(()=>received.filter(x=>x.role==='host'&&x.type==='input').length===30);
  const duration=performance.now()-start;
  assert.ok(duration<1000,`relay unexpectedly slow: ${duration}`);
- host.send({type:'state',state:{ball:{x:500,y:400}}});guest.send({type:'serve'});
+ host.send({type:'state',state:{ball:{x:500,y:400}}});guest.send({type:'serve',gesture:{brushY:-2}});
  await until(()=>received.some(x=>x.role==='guest'&&x.type==='state')&&received.some(x=>x.role==='host'&&x.type==='serve'));
  await until(()=>guest.reliable.length===0);
  assert.equal(received.filter(x=>x.type==='serve').length,1,'commands must not be duplicated across socket and polling');
+ assert.deepEqual(received.find(x=>x.role==='host'&&x.type==='serve').gesture,{brushY:-2},'serve brush must travel in the reliable command, independently of motion updates');
  const previousSocket=guest.socket;
  previousSocket.close();
  await until(()=>!guest._socketOpen());

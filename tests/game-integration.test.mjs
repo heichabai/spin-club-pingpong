@@ -57,7 +57,7 @@ function forwardReturn({ duration = 120, stroke = 'drive', tilt = 0, spinX = 0 }
   return h;
 }
 
-function harness(mode = 'host') {
+function harness(mode = 'host', options = {}) {
   let clock = 1000;
   let frameID = 0;
   let state;
@@ -84,15 +84,15 @@ function harness(mode = 'host') {
     pointerWorld: (x, y) => ({ x, y }),
     render: (value) => { state = value; },
   });
-  const game = createGame(canvas, { onHit: (event) => hits.push({ ...event }), onUpdate: (update) => updates.push(update) });
+  const game = createGame(canvas, { onHit: (event) => hits.push({ ...event }), onUpdate: (update) => updates.push(update), ...options });
   game.setSound(false);
   game.setMode(mode);
   const fixture = {
     game, hits, updates,
     get state() { return state; },
     get clock() { return clock; },
-    pointer(type, x, y, pointerID = 1) {
-      listeners.get(type)?.({ type, clientX: x, clientY: y, pointerType: 'touch', pointerId: pointerID });
+    pointer(type, x, y, pointerID = 1, pointerType = 'touch') {
+      listeners.get(type)?.({ type, clientX: x, clientY: y, pointerType, pointerId: pointerID });
     },
     advance(ms) { clock += ms; },
     step(ms = 16) {
@@ -553,4 +553,101 @@ test('interrupted system touch cannot leave a ghost power stroke', () => {
     const input=h.game.getInput();
     assert.equal(input.vx,0);assert.equal(input.vy,0);assert.equal(input.ax,0);assert.equal(input.ay,0);
   } finally {h.close()}
+});
+
+function brushServe(h, dy, duration = 120, pointerType = 'touch') {
+  h.pointer('pointerdown', 500, 650 - dy / 2, 1, pointerType);
+  h.advance(duration);
+  h.pointer('pointermove', 500, 650 + dy / 2, 1, pointerType);
+  assert.ok(['ready', 'idle'].includes(h.game.snapshot().phase), 'a brush must not launch before release');
+  h.pointer('pointerup', 500, 650 + dy / 2, 1, pointerType);
+}
+
+test('upward and downward serve brushes create opposite physical spin and legal two-bounce flights', () => {
+  for (const pointerType of ['touch', 'mouse']) for (const dy of [-160, 160]) {
+    const h = harness();
+    try {
+      brushServe(h, dy, 80, pointerType);
+      const initial = h.game.snapshot().ball;
+      assert.equal(h.game.snapshot().phase, 'playing');
+      assert.ok(initial.spinX * Math.sign(initial.vy) * -Math.sign(dy) > 250);
+      assert.match(h.game.snapshot().lastShot, dy < 0 ? /上旋发球/ : /下旋发球/);
+      const replay = { ...initial }, bounces = [];
+      let net = false;
+      for (let i = 0; i < 300 && bounces.length < 2; i++) for (const event of stepBallFlight(replay, 1 / 240)) {
+        if (event.type === 'table') bounces.push(event.side);
+        if (event.type === 'net') net = true;
+      }
+      assert.deepEqual(bounces, [0, 1], 'spin serve must land on own half and then the opponent half');
+      assert.equal(net, false);
+      const spinning = { ...initial }, flat = { ...initial, spinX: 0 };
+      stepBallFlight(spinning, 0.07);stepBallFlight(flat, 0.07);
+      assert.ok(Math.abs(spinning.height - flat.height) > 0.001, 'serve spin must change flight, not just the HUD');
+    } finally { h.close(); }
+  }
+});
+
+test('faster serve brushing creates stronger spin and a faster ball', () => {
+  const results=[];
+  for (const duration of [400, 80]) {
+    const h=harness();
+    try {brushServe(h, -160, duration);results.push(h.game.snapshot().ball)} finally {h.close()}
+  }
+  assert.ok(Math.abs(results[1].spinX) > Math.abs(results[0].spinX) * 1.5);
+  assert.ok(ballSpeed(results[1]) > ballSpeed(results[0]));
+});
+
+test('the last brush direction wins and a cancelled or stationary drag cannot accidentally serve', () => {
+  const h=harness();
+  try {
+    h.pointer('pointerdown',500,650);
+    h.advance(60);h.pointer('pointermove',500,570);
+    h.advance(140);h.pointer('pointermove',500,650);
+    h.pointer('pointerup',500,650);
+    assert.equal(h.game.snapshot().phase,'playing');
+    assert.ok(h.game.snapshot().ball.spinX>0,'the final downward brush must serve backspin');
+    h.game.restart();
+    h.pointer('pointerdown',500,650);h.advance(60);h.pointer('pointermove',500,570);
+    h.pointer('pointercancel',500,570);
+    assert.equal(h.game.snapshot().phase,'ready');
+    h.pointer('pointerdown',500,650);h.advance(60);h.pointer('pointermove',500,570);
+    h.advance(500);h.pointer('pointerup',500,570);
+    assert.equal(h.game.snapshot().phase,'ready','holding after a stroke must not reuse stale velocity');
+  } finally {h.close()}
+});
+
+test('a human server keeps the ball ready until choosing a serve gesture', () => {
+  const h=harness();
+  try {
+    h.game.serve();setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24);
+    assert.equal(h.game.snapshot().serveSide,0);
+    h.settle(2000);
+    assert.equal(h.game.snapshot().phase,'ready','the timer must leave time to brush a human serve');
+    brushServe(h,-80);assert.equal(h.game.snapshot().phase,'playing');
+  } finally {h.close()}
+});
+
+test('guest serve carries its own brush through the action callback and rotates spin for the far server', () => {
+  let state,command;
+  const h=harness();
+  try {
+    for(let i=0;i<2;i++){h.game.serve();setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24)}
+    state=h.game.snapshot();
+    h.game.serve({brushY:-2},0);
+    assert.equal(h.game.snapshot().phase,'ready','the host cannot serve on the guest turn');
+  } finally {h.close()}
+  const guest=harness('guest',{onAction:(action,gesture)=>{command={action,gesture};return true}});
+  try {
+    guest.game.applySnapshot(state);guest.step(1);
+    brushServe(guest,-160,80);
+    assert.equal(command.action,'serve');assert.ok(command.gesture.brushY<0);
+    assert.equal(guest.game.snapshot().phase,'ready','the guest must wait for the authoritative serve');
+  } finally {guest.close()}
+  const host=harness();
+  try {
+    for(let i=0;i<2;i++){host.game.serve();setIncoming(host,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});host.step(24)}
+    host.game.serve(command.gesture,1);
+    const ball=host.game.snapshot().ball;
+    assert.equal(host.game.snapshot().phase,'playing');assert.ok(ball.vy>0&&ball.spinX>250,'upward guest brush remains topspin after court rotation');
+  } finally {host.close()}
 });
