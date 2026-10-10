@@ -10,7 +10,7 @@
 - 只部署一个实例；联机优先 WebRTC，不通时使用同源 WebSocket 实时中继；HTTP 保留用于房间管理及断线恢复。
 - Free 服务闲置可能休眠，首次访问需等待唤醒；正式比赛的延迟与手机可达性仍需实机验证。
 
-主分支更新后 Render 自动部署。不要上传 node_modules、.env、.git、.wrangler 或 .openai 本地信息。
+当前服务使用公开仓库 URL，主分支更新后需手动触发 Render 部署；连接 GitHub 集成后可启用自动部署。不要上传 node_modules、.env、.git、.wrangler 或 .openai 本地信息。
 
 ## 验证
 
