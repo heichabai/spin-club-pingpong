@@ -88,7 +88,7 @@ function harness(mode = 'host', options = {}) {
   game.setSound(false);
   game.setMode(mode);
   const fixture = {
-    game, hits, updates,
+    game, hits, updates, mode,
     get state() { return state; },
     get clock() { return clock; },
     pointer(type, x, y, pointerID = 1, pointerType = 'touch') {
@@ -370,12 +370,12 @@ test('the practice opponent return clears the net and lands on the human half', 
   }
 });
 
-test('tapping to serve after moving the racket forward still starts a legal two-bounce serve', () => {
+test('brushing to serve after moving the racket forward still starts a legal two-bounce serve', () => {
   const h = harness();
   try {
     h.pointer('pointerdown', 500, 470); h.settle(420); h.pointer('pointerup', 500, 470);
-    h.pointer('pointerdown', 500, 470, 2); h.advance(40); h.pointer('pointerup', 500, 470, 2);
-    assert.equal(h.game.snapshot().phase, 'playing', 'a short real touch tap should serve');
+    h.pointer('pointerdown', 500, 470, 2); h.advance(60); h.pointer('pointermove', 500, 440, 2);
+    assert.equal(h.game.snapshot().phase, 'playing', 'a brush should serve while the finger is still down');
     let received = false;
     for (let i = 0; i < 90; i++) {
       h.step(16); const snapshot = h.game.snapshot();
@@ -538,9 +538,9 @@ test('touch height assistance catches an aligned high ball without moving the ba
 test('a brush beyond the reach boundary keeps its real hand velocity', () => {
   const h=harness();
   try {
-    h.pointer('pointerdown',820,670);h.advance(20);h.pointer('pointermove',870,670);
-    h.advance(20);h.pointer('pointermove',920,670);
-    assert.equal(h.game.getInput().x,830);
+    h.pointer('pointerdown',920,670);h.advance(20);h.pointer('pointermove',970,670);
+    h.advance(20);h.pointer('pointermove',1020,670);
+    assert.equal(h.game.getInput().x,930);
     assert.ok(h.game.getInput().vx>1500,'clamping reach must not erase an edge brush');
   } finally {h.close()}
 });
@@ -559,7 +559,7 @@ function brushServe(h, dy, duration = 120, pointerType = 'touch') {
   h.pointer('pointerdown', 500, 650 - dy / 2, 1, pointerType);
   h.advance(duration);
   h.pointer('pointermove', 500, 650 + dy / 2, 1, pointerType);
-  assert.ok(['ready', 'idle'].includes(h.game.snapshot().phase), 'a brush must not launch before release');
+  if (h.mode !== 'guest') assert.equal(h.game.snapshot().phase, 'playing', 'a brush must launch without waiting for release');
   h.pointer('pointerup', 500, 650 + dy / 2, 1, pointerType);
 }
 
@@ -597,22 +597,22 @@ test('faster serve brushing creates stronger spin and a faster ball', () => {
   assert.ok(ballSpeed(results[1]) > ballSpeed(results[0]));
 });
 
-test('the last brush direction wins and a cancelled or stationary drag cannot accidentally serve', () => {
-  const h=harness();
+test('a brush fires once immediately, while taps and cancelled small movements leave the ball ready', () => {
+  const commands=[];
+  const h=harness('host',{onAction:(action,gesture)=>{commands.push({action,gesture});return false}});
   try {
-    h.pointer('pointerdown',500,650);
-    h.advance(60);h.pointer('pointermove',500,570);
-    h.advance(140);h.pointer('pointermove',500,650);
-    h.pointer('pointerup',500,650);
-    assert.equal(h.game.snapshot().phase,'playing');
-    assert.ok(h.game.snapshot().ball.spinX>0,'the final downward brush must serve backspin');
-    h.game.restart();
-    h.pointer('pointerdown',500,650);h.advance(60);h.pointer('pointermove',500,570);
-    h.pointer('pointercancel',500,570);
+    h.pointer('pointerdown',500,650);h.advance(40);h.pointer('pointerup',500,650);
+    assert.equal(h.game.snapshot().phase,'ready','a tap must never serve');
+    h.pointer('pointerdown',500,650);h.advance(60);h.pointer('pointermove',500,640);
+    h.pointer('pointercancel',500,640);
     assert.equal(h.game.snapshot().phase,'ready');
     h.pointer('pointerdown',500,650);h.advance(60);h.pointer('pointermove',500,570);
-    h.advance(500);h.pointer('pointerup',500,570);
-    assert.equal(h.game.snapshot().phase,'ready','holding after a stroke must not reuse stale velocity');
+    assert.equal(h.game.snapshot().phase,'playing','moving the finger triggers the serve');
+    const initial=h.game.snapshot().ball;
+    h.advance(140);h.pointer('pointermove',500,650);h.pointer('pointerup',500,650);
+    assert.equal(commands.length,1,'continued movement and release must not send another serve');
+    assert.equal(h.game.snapshot().ball.flightId,initial.flightId);
+    assert.ok(initial.spinX<0,'the initial upward brush makes topspin');
   } finally {h.close()}
 });
 
@@ -650,4 +650,34 @@ test('guest serve carries its own brush through the action callback and rotates 
     const ball=host.game.snapshot().ball;
     assert.equal(host.game.snapshot().phase,'playing');assert.ok(ball.vy>0&&ball.spinX>250,'upward guest brush remains topspin after court rotation');
   } finally {host.close()}
+});
+
+test('expanded reach catches deep and wide balls and preserves the same limits for the guest', () => {
+  const h=harness();
+  try {
+    h.game.serve();
+    h.pointer('pointerdown',900,840);h.settle(220);
+    const input=h.game.getInput();assert.equal(input.x,900);assert.equal(input.y,840);
+    setIncoming(h,{x:900,y:h.state.players[0].y-12,vy:600,vh:-0.2});h.step(24);
+    assert.ok(h.hits.some(x=>x.kind==='paddle'&&x.side===0),'a deep ball outside the old reach must be returnable');
+    h.game.setRemoteInput({x:900,y:840,vx:0,vy:0,height:0.95,gesture:true});h.step(1);
+    const far=h.game.snapshot().players[1];assert.equal(far.x,100);assert.equal(far.y,-40);assert.equal(far.height,0.95);
+    h.pointer('pointermove',-500,1200);assert.equal(h.game.getInput().x,70);assert.equal(h.game.getInput().y,870);
+    h.game.setRemoteInput({x:-500,y:1200,vx:0,vy:0});h.step(1);
+    const limited=h.game.snapshot().players[1];assert.equal(limited.x,930);assert.equal(limited.y,-70);
+  } finally {h.close()}
+});
+
+test('widening the racket range does not park a serve outside the legal tabletop', () => {
+  for(const x of [70,930]){
+    const h=harness();
+    try {
+      h.pointer('pointerdown',x,840);h.settle(100);h.pointer('pointerup',x,840);
+      h.game.serve({brushY:-2});const b=h.game.snapshot().ball;
+      assert.ok(b.x>=150&&b.x<=850);
+      const sides=[];let net=false;
+      for(let i=0;i<300&&sides.length<2;i++)for(const e of stepBallFlight(b,1/240)){if(e.type==='table')sides.push(e.side);if(e.type==='net')net=true}
+      assert.deepEqual(sides,[0,1]);assert.equal(net,false);
+    } finally {h.close()}
+  }
 });

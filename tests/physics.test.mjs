@@ -46,8 +46,8 @@ test('topspin dips and backspin floats through the Magnus force with identical l
   stepBallFlight(neutral, 0.12);
   stepBallFlight(top, 0.12);
   stepBallFlight(back, 0.12);
-  assert.ok(top.height < neutral.height - 0.015);
-  assert.ok(back.height > neutral.height + 0.015);
+  assert.ok(top.height < neutral.height - 0.03);
+  assert.ok(back.height > neutral.height + 0.03);
   assert.ok(top.vh < neutral.vh && back.vh > neutral.vh);
 });
 
@@ -56,7 +56,7 @@ test('side spin changes the actual flight path in opposite directions without an
   const left = ball({ height: 1, spinY: 350 });
   stepBallFlight(right, 0.2);
   stepBallFlight(left, 0.2);
-  assert.ok(right.x > 515 && left.x < 485);
+  assert.ok(right.x > 540 && left.x < 460);
   assert.ok(right.vx > 0 && left.vx < 0);
   close(right.x - 500, 500 - left.x, 1e-5);
 });
@@ -146,7 +146,7 @@ test('faster forward motion and bounded acceleration increase the physical impac
   assert.ok(speed(fast) > speed(slow) + 3);
   assert.ok(speed(accelerating) > speed(constant) + 1);
   const capped = computeShot(paddle({ vy: -6 / Z_SCALE, ay: -1e9, tilt: 3 }), 500, 0, 0, incoming);
-  assert.ok(speed(capped) <= 14.00001);
+  assert.ok(speed(capped) <= 12.50001);
 });
 
 test('top and back strokes generate the correct angular direction and calibrated playable shots', () => {
