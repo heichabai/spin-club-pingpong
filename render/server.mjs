@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { attachLiveRelay } from './live.mjs';
 import { Readable } from 'node:stream';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -28,5 +29,6 @@ const server=http.createServer(async(req,res)=>{
     res.end(req.method==='HEAD'?undefined:data);
   }catch(error){console.error('Request failed',error.message);if(!res.headersSent)res.writeHead(500);res.end('Internal server error')}
 });
+const stopLive=attachLiveRelay(server,POST);
 server.listen(Number(process.env.PORT)||3000,'0.0.0.0',()=>console.log('SPIN CLUB ready'));
-process.on('SIGTERM',()=>{server.close(()=>{DB.close();process.exit(0)});setTimeout(()=>process.exit(0),10000).unref()});
+process.on('SIGTERM',()=>{stopLive();server.close(()=>{DB.close();process.exit(0)});setTimeout(()=>process.exit(0),10000).unref()});
