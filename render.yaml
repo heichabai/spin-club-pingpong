@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: spin-club-pingpong-zsj
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm ci && npm run build:render
+    startCommand: npm run start:render
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
