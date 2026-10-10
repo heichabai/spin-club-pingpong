@@ -8,7 +8,7 @@ const sourceURL = new URL('../lib/game.js', import.meta.url);
 let source = await readFile(sourceURL, 'utf8');
 source = source.replace(/import\s*\{\s*createScene3D\s*\}\s*from\s*['"]\.\/scene3d\.js['"];?/, 'const createScene3D = (...args) => globalThis.__testScene3D(...args);');
 source = source.replace(/from\s*(['"])(\.\/[^'"]+)\1/g, (_, quote, path) => `from ${quote}${new URL(path, sourceURL).href}${quote}`);
-const { createGame, getBallHeight, BALL_TIME_SCALE } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { createGame, getBallHeight, BALL_TIME_SCALE, SERVE_PROTECTION_MS, POINT_BREAK_MS } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const { X_SCALE, Z_SCALE, BALL_RADIUS, stepBallFlight } = await import('../lib/physics.js');
 
 function setIncoming(h, overrides = {}) {
@@ -29,7 +29,7 @@ function playSwipe(direction) {
   h.pointer('pointerdown', 500 - direction * 90, 670);
   h.settle(400);
   h.pointer('pointermove', 500 - direction * 90, 670);
-  h.game.serve();
+  serveReady(h,);
   h.advance(60); h.pointer('pointermove', 500, 670);
   h.step(16);
   setIncoming(h, { x: h.state.players[0].x + direction * 12 });
@@ -50,14 +50,14 @@ function forwardReturn({ duration = 120, stroke = 'drive', tilt = 0, spinX = 0 }
     h.pointer('pointermove', 500, 700 - 100 * (i / 6) ** 2, 2);
     h.step(1);
   }
-  h.game.serve();
+  serveReady(h,);
   setIncoming(h, { spinX });
   h.step(16);
   assert.ok(h.hits.some((event) => event.kind === 'paddle' && event.side === 0), 'the forward stroke fixture must produce a legal racket return');
   return h;
 }
 
-function harness(mode = 'host', options = {}) {
+function harness(mode = 'host', options = {}, initiallyLocked = false) {
   let clock = 1000;
   let frameID = 0;
   let state;
@@ -111,6 +111,7 @@ function harness(mode = 'host', options = {}) {
     },
   };
   fixture.step(1);
+  if (!initiallyLocked) { fixture.advance(SERVE_PROTECTION_MS); fixture.step(1); }
   return fixture;
 }
 
@@ -145,7 +146,7 @@ test('a 180 ms touch swipe with merged movement events still produces a controll
   for (const direction of [-1, 1]) {
     const h = harness();
     try {
-      h.game.serve();
+      serveReady(h,);
       h.pointer('pointerdown', 500 - direction * 90, 670);
       h.advance(180); h.pointer('pointermove', 500 + direction * 90, 670);
       const movingVelocity = h.game.getInput().vx;
@@ -182,7 +183,7 @@ test('left and right touch swipes create opposite real spin and curved flights',
     // Comparing against a straight tangent would also count drag as curvature.
     const control = harness();
     try {
-      control.game.serve(); Object.assign(control.state.ball, shot, { spin: 0, spinX: 0, spinY: 0, spinZ: 0 });
+      serveReady(control,); Object.assign(control.state.ball, shot, { spin: 0, spinX: 0, spinY: 0, spinZ: 0 });
       control.settle(160);
       const departure = curved.x - control.game.snapshot().ball.x;
       assert.ok(Math.abs(departure) > 0.5, 'rotation must alter the actual path beyond drag and the initial diagonal heading');
@@ -197,7 +198,7 @@ test('a moving racket sweeping across an arriving ball registers contact', () =>
   const h = harness();
   try {
     h.pointer('pointerdown', 350, 670); h.settle(420);
-    h.pointer('pointermove', 350, 670); h.game.serve();
+    h.pointer('pointermove', 350, 670); serveReady(h,);
     setIncoming(h, { x: 500, y: 665, vy: 90 });
     h.advance(20); h.pointer('pointermove', 650, 670); h.step(45);
     assert.ok(h.hits.some((event) => event.kind === 'paddle' && event.side === 0), 'contact between two visible racket positions must not be skipped');
@@ -208,7 +209,7 @@ test('a moving racket sweeping across an arriving ball registers contact', () =>
 test('a racket return preserves physical height without jumping to a preset arc', () => {
   const h = harness();
   try {
-    h.game.serve(); setIncoming(h, { y: 663, height: 0.29, vh: 0 });
+    serveReady(h,); setIncoming(h, { y: 663, height: 0.29, vh: 0 });
     const heightBefore = getBallHeight(h.state.ball, 'playing');
     h.step(16);
     assert.ok(h.hits.some((event) => event.kind === 'paddle' && event.side === 0));
@@ -265,7 +266,7 @@ test('closing the racket suppresses topspin lift while opening it lifts a backsp
 test('one receiver-side table bounce is legal and a second bounce loses the receiver the point', () => {
   const h = harness();
   try {
-    h.game.serve(); setIncoming(h, { y: 550, height: BALL_RADIUS + 0.002, vh: -1, receiverBounces: 0 });
+    serveReady(h,); setIncoming(h, { y: 550, height: BALL_RADIUS + 0.002, vh: -1, receiverBounces: 0 });
     h.step(16);
     let snapshot = h.game.snapshot();
     assert.equal(snapshot.phase, 'playing'); assert.deepEqual(snapshot.score, [0, 0]);
@@ -281,7 +282,7 @@ test('racket contact before a first or second table bounce uses chronological co
   for (const priorBounces of [0, 1]) {
     const h = harness();
     try {
-      h.game.serve();
+      serveReady(h,);
       Object.assign(h.state.input, { height: 0.10, tilt: 18 });
       Object.assign(h.state.players[0], { height: 0.10, tilt: 18 });
       // The low open face touches at the start of this 4 ms frame; the
@@ -303,7 +304,7 @@ test('racket contact before a first or second table bounce uses chronological co
 test('a spinning ball returning to the hitter after a legal opponent bounce still wins the hitter the point', () => {
   const h = harness();
   try {
-    h.game.serve();
+    serveReady(h,);
     setIncoming(h, { y: 550, height: BALL_RADIUS + 0.002, vh: -1, lastHitter: 0, receiverBounces: 1 });
     h.step(16);
     assert.deepEqual(h.game.snapshot().score, [1, 0], 'the opponent failed to return after the legal first bounce');
@@ -315,11 +316,11 @@ test('an ordinary serve physically bounces on both halves before the receiver ma
     const h = harness();
     try {
       if (server === 1) for (let i = 0; i < 2; i++) {
-        h.game.serve(); setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(24);
+        serveReady(h,); setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(24);
       }
       const startingScore = h.game.snapshot().score;
       assert.equal(h.game.snapshot().serveSide, server);
-      h.game.serve(); let sawOwnBounce = false, received = null;
+      serveReady(h,); let sawOwnBounce = false, received = null;
       const trace = [];
       for (let i = 0; i < 90; i++) {
         h.step(16); const snapshot = h.game.snapshot();
@@ -340,7 +341,7 @@ test('the practice opponent can return a real legal serve instead of a scripted 
   const originalRandom = Math.random;
   Math.random = () => 0.5;
   try {
-    h.game.setDifficulty('hard'); h.game.start(); h.game.serve();
+    h.game.setDifficulty('hard'); h.game.start(); serveReady(h,);
     for (let i = 0; i < 110 && h.game.snapshot().rally === 0; i++) h.step(16);
     const result = h.game.snapshot();
     assert.ok(result.rally >= 1, 'the practice opponent must be able to return the initial serve');
@@ -354,7 +355,7 @@ test('the practice opponent return clears the net and lands on the human half', 
     const h = harness('practice'), originalRandom = Math.random;
     Math.random = () => 0.5;
     try {
-      h.game.setDifficulty(difficulty); h.game.start(); h.game.serve();
+      h.game.setDifficulty(difficulty); h.game.start(); serveReady(h,);
       let crossed = false, landed = false;
       for (let i = 0; i < 220; i++) {
         h.step(16); const snapshot = h.game.snapshot();
@@ -390,7 +391,7 @@ test('a serve landing first on the opponent half is a fault and a valid net serv
   for (const netLet of [false, true]) {
     const h = harness();
     try {
-      h.game.serve();
+      serveReady(h,);
       setIncoming(h, { y: 250, height: BALL_RADIUS + 0.002, vh: -1, vy: -100, lastHitter: 0, receiverBounces: 0, serveStage: netLet ? 2 : 1, netTouched: netLet });
       h.step(16); const result = h.game.snapshot();
       assert.equal(result.phase, 'ready');
@@ -403,7 +404,7 @@ test('a serve landing first on the opponent half is a fault and a valid net serv
 test('a receiver cannot volley an incoming ball before its first table bounce', () => {
   const h = harness();
   try {
-    h.game.serve(); setIncoming(h, { receiverBounces: 0 }); h.step(24);
+    serveReady(h,); setIncoming(h, { receiverBounces: 0 }); h.step(24);
     const snapshot = h.game.snapshot();
     assert.deepEqual(snapshot.score, [0, 1]);
     assert.equal(snapshot.rally, 0, 'an illegal volley must not count as a successful return');
@@ -414,7 +415,7 @@ test('a low shot hits the real net while a sufficiently high shot crosses it', (
   for (const height of [0.08, 0.4]) {
     const h = harness();
     try {
-      h.game.serve();
+      serveReady(h,);
       setIncoming(h, { y: 414, height, vh: 0, vy: -1000, lastHitter: 0, receiverBounces: 0, netCrossed: false });
       h.step(40);
       let snapshot = h.game.snapshot();
@@ -436,7 +437,7 @@ test('a ball can fly beyond the table edge but cannot bounce from an invisible f
   for (const x of [120, 880]) {
     const h = harness();
     try {
-      h.game.serve(); setIncoming(h, { x, y: 500, height: 0.5, vh: 0, vx: 0, vy: 0, lastHitter: 0, receiverBounces: 0 });
+      serveReady(h,); setIncoming(h, { x, y: 500, height: 0.5, vh: 0, vx: 0, vy: 0, lastHitter: 0, receiverBounces: 0 });
       h.step(16);
       assert.deepEqual(h.game.snapshot().score, [0, 0], 'a ball merely flying over an edge is not immediately dead');
       Object.assign(h.state.ball, { height: -0.72, vh: -2 }); h.step(24);
@@ -481,7 +482,7 @@ test('remote gestures preserve acceleration and face controls while rotating the
 test('a guest starts each new flight at contact instead of blending through the old trajectory', () => {
   let incoming;
   const host = harness();
-  try { host.game.serve(); setIncoming(host, { y: 600 }); incoming = host.game.snapshot(); }
+  try { serveReady(host,); setIncoming(host, { y: 600 }); incoming = host.game.snapshot(); }
   finally { host.close(); }
   const guest = harness('guest');
   try {
@@ -501,7 +502,7 @@ test('opposite bare touch gestures create top and backspin without selecting a s
     const h = harness();
     try {
       h.pointer('pointerdown', 500, 630); h.settle(420);
-      h.game.serve();
+      serveReady(h,);
       for (let i = 1; i <= 5; i++) {
         h.advance(17); h.pointer('pointermove', 500, 630 + direction * 85 * (i / 5) ** 2); h.step(1);
       }
@@ -524,7 +525,7 @@ test('opposite bare touch gestures create top and backspin without selecting a s
 test('touch height assistance catches an aligned high ball without moving the ball onto a fake arc', () => {
   const h = harness();
   try {
-    h.game.serve();
+    serveReady(h,);
     setIncoming(h, { y: 650, height: 0.6, vh: -0.2, vy: 1200 });
     h.step(30);
     const shot = h.game.snapshot().ball;
@@ -555,7 +556,17 @@ test('interrupted system touch cannot leave a ghost power stroke', () => {
   } finally {h.close()}
 });
 
+function waitForServe(h) {
+  const delay = h.game.snapshot().serveDelayMs;
+  if (delay > 0) { h.advance(delay + 1); h.step(1); }
+}
+
+// Physics fixtures explicitly wait for the ready window; timing regressions
+// below use the raw handlers and public serve method without this helper.
+function serveReady(h, gesture = null, actor = null) { waitForServe(h); h.game.serve(gesture, actor); }
+
 function brushServe(h, dy, duration = 120, pointerType = 'touch') {
+  waitForServe(h);
   h.pointer('pointerdown', 500, 650 - dy / 2, 1, pointerType);
   h.advance(duration);
   h.pointer('pointermove', 500, 650 + dy / 2, 1, pointerType);
@@ -619,7 +630,7 @@ test('a brush fires once immediately, while taps and cancelled small movements l
 test('a human server keeps the ball ready until choosing a serve gesture', () => {
   const h=harness();
   try {
-    h.game.serve();setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24);
+    serveReady(h,);setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24);
     assert.equal(h.game.snapshot().serveSide,0);
     h.settle(2000);
     assert.equal(h.game.snapshot().phase,'ready','the timer must leave time to brush a human serve');
@@ -631,9 +642,9 @@ test('guest serve carries its own brush through the action callback and rotates 
   let state,command;
   const h=harness();
   try {
-    for(let i=0;i<2;i++){h.game.serve();setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24)}
+    for(let i=0;i<2;i++){serveReady(h,);setIncoming(h,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});h.step(24)}
     state=h.game.snapshot();
-    h.game.serve({brushY:-2},0);
+    serveReady(h,{brushY:-2},0);
     assert.equal(h.game.snapshot().phase,'ready','the host cannot serve on the guest turn');
   } finally {h.close()}
   const guest=harness('guest',{onAction:(action,gesture)=>{command={action,gesture};return true}});
@@ -645,8 +656,8 @@ test('guest serve carries its own brush through the action callback and rotates 
   } finally {guest.close()}
   const host=harness();
   try {
-    for(let i=0;i<2;i++){host.game.serve();setIncoming(host,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});host.step(24)}
-    host.game.serve(command.gesture,1);
+    for(let i=0;i<2;i++){serveReady(host,);setIncoming(host,{x:120,y:500,height:-0.72,vh:-2,lastHitter:0,receiverBounces:0});host.step(24)}
+    serveReady(host,command.gesture,1);
     const ball=host.game.snapshot().ball;
     assert.equal(host.game.snapshot().phase,'playing');assert.ok(ball.vy>0&&ball.spinX>250,'upward guest brush remains topspin after court rotation');
   } finally {host.close()}
@@ -655,7 +666,7 @@ test('guest serve carries its own brush through the action callback and rotates 
 test('expanded reach catches deep and wide balls and preserves the same limits for the guest', () => {
   const h=harness();
   try {
-    h.game.serve();
+    serveReady(h,);
     h.pointer('pointerdown',900,840);h.settle(220);
     const input=h.game.getInput();assert.equal(input.x,900);assert.equal(input.y,840);
     setIncoming(h,{x:900,y:h.state.players[0].y-12,vy:600,vh:-0.2});h.step(24);
@@ -673,7 +684,7 @@ test('widening the racket range does not park a serve outside the legal tabletop
     const h=harness();
     try {
       h.pointer('pointerdown',x,840);h.settle(100);h.pointer('pointerup',x,840);
-      h.game.serve({brushY:-2});const b=h.game.snapshot().ball;
+      serveReady(h,{brushY:-2});const b=h.game.snapshot().ball;
       assert.ok(b.x>=150&&b.x<=850);
       const sides=[];let net=false;
       for(let i=0;i<300&&sides.length<2;i++)for(const e of stepBallFlight(b,1/240)){if(e.type==='table')sides.push(e.side);if(e.type==='net')net=true}
@@ -738,7 +749,7 @@ test('guest hover serve is turn-checked, reliable and fires once until the next 
 test('slower match clock preserves the spinning flight and immediate hand control', () => {
   const h = harness();
   try {
-    h.game.serve();
+    serveReady(h,);
     setIncoming(h, { x: 500, y: 500, height: 0.6, vh: 0.5, vy: -400, vx: 80, spinX: -150, spinY: 120, lastHitter: 0, receiverBounces: 0 });
     const expected = { ...h.game.snapshot().ball };
     const fast = { ...expected };
@@ -750,5 +761,116 @@ test('slower match clock preserves the spinning flight and immediate hand contro
     assert.ok(Math.abs(actual.y - 500) < Math.abs(fast.y - 500) * 0.75);
     h.pointer('pointermove', 900, 840, 1, 'mouse');
     assert.equal(h.game.getInput().x, 900); assert.equal(h.game.getInput().y, 840);
+  } finally { h.close(); }
+});
+
+test('the initial one-second protection rejects direct serves and protected mouse/touch motion', () => {
+  for (const pointerType of ['mouse', 'touch']) {
+    const h = harness('host', {}, true);
+    try {
+      assert.ok(h.game.snapshot().serveDelayMs > 990);
+      h.game.serve({ brushY: -2 }, 0);
+      assert.equal(h.game.snapshot().phase, 'ready');
+      if (pointerType === 'touch') h.pointer('pointerdown', 500, 650, 1, pointerType);
+      h.pointer('pointermove', 500, 650, 1, pointerType);
+      h.advance(400); h.pointer('pointermove', 500, 570, 1, pointerType);
+      h.advance(h.game.snapshot().serveDelayMs - 1);
+      h.pointer('pointermove', 500, 500, 1, pointerType);
+      assert.equal(h.game.snapshot().phase, 'ready', 'even a full brush cannot launch before one second');
+      h.advance(1); h.pointer('pointermove', 500, 450, 1, pointerType);
+      assert.equal(h.game.snapshot().phase, 'ready', 'protected movement must not be buffered until unlock');
+      h.advance(40); h.pointer('pointermove', 500, 442, 1, pointerType);
+      assert.equal(h.game.snapshot().phase, 'playing', 'a fresh brush works without clicking or lifting');
+      assert.ok(h.game.snapshot().ball.spinX < 0);
+    } finally { h.close(); }
+  }
+});
+
+test('a point holds its result for 1.5 seconds, then gives one second to prepare without auto-serving', () => {
+  const h = harness();
+  try {
+    h.game.serve();
+    setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
+    let state = h.game.snapshot();
+    assert.deepEqual(state.score, [0, 1]);
+    assert.equal(state.pointDelayMs, POINT_BREAK_MS);
+    assert.equal(state.serveDelayMs, POINT_BREAK_MS + SERVE_PROTECTION_MS);
+    assert.equal(state.ball.visible, false, 'next serve ball must not pop up at the instant of scoring');
+    h.game.serve({ brushY: -2 }, 0); assert.equal(h.game.snapshot().phase, 'ready');
+    h.advance(state.pointDelayMs - 2); h.step(1);
+    assert.equal(h.game.snapshot().ball.visible, false);
+    h.step(1); state = h.game.snapshot();
+    assert.equal(state.pointDelayMs, 0); assert.equal(state.ball.visible, true);
+    assert.equal(state.serveDelayMs, SERVE_PROTECTION_MS);
+    h.game.serve({ brushY: -2 }, 0); assert.equal(h.game.snapshot().phase, 'ready');
+    h.advance(SERVE_PROTECTION_MS); h.step(1);
+    assert.equal(h.game.snapshot().phase, 'ready', 'unlock only permits a new gesture, it never launches by itself');
+    h.pointer('pointermove', 500, 650, 1, 'mouse');
+    h.advance(40); h.pointer('pointermove', 500, 658, 1, 'mouse');
+    assert.equal(h.game.snapshot().phase, 'playing'); assert.ok(h.game.snapshot().ball.spinX > 0);
+  } finally { h.close(); }
+});
+
+test('holding a finger through a point cannot reuse the old stroke but allows a fresh brush after protection', () => {
+  const h = harness();
+  try {
+    h.game.serve(); h.pointer('pointerdown', 500, 650);
+    setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
+    h.advance(1200); h.pointer('pointermove', 500, 550);
+    h.advance(1000); h.pointer('pointermove', 500, 450);
+    assert.equal(h.game.snapshot().phase, 'ready');
+    h.advance(400); h.pointer('pointermove', 500, 500);
+    assert.equal(h.game.snapshot().phase, 'ready');
+    h.advance(40); h.pointer('pointermove', 500, 492);
+    assert.equal(h.game.snapshot().phase, 'playing');
+  } finally { h.close(); }
+});
+
+test('guest countdown uses remaining durations across independent clocks and emits no protected command', () => {
+  let state;
+  const host = harness('host', {}, true);
+  try { state = host.game.snapshot(); state.serveSide = 1; } finally { host.close(); }
+  const commands = [];
+  const guest = harness('guest', { onAction: (action, gesture) => { commands.push({ action, gesture }); return true; } });
+  try {
+    guest.advance(600_000); guest.game.applySnapshot(state);
+    assert.equal(guest.game.snapshot().serveDelayMs, state.serveDelayMs);
+    guest.pointer('pointermove', 500, 650, 1, 'mouse');
+    guest.advance(80); guest.pointer('pointermove', 500, 550, 1, 'mouse');
+    assert.equal(commands.length, 0);
+    const next = { ...state, serveDelayMs: 100 };
+    guest.game.applySnapshot(next); guest.game.applySnapshot(next);
+    assert.equal(guest.game.snapshot().serveDelayMs, 100, 'snapshot receipt must not restart a full one-second guard');
+    guest.advance(101); guest.pointer('pointermove', 500, 650, 1, 'mouse');
+    guest.advance(40); guest.pointer('pointermove', 500, 642, 1, 'mouse');
+    assert.equal(commands.length, 1); assert.ok(commands[0].gesture.brushY < 0);
+  } finally { guest.close(); }
+});
+
+test('the host rejects a guest serve during the authoritative protection window', () => {
+  const h = harness();
+  try {
+    for (let i = 0; i < 2; i++) {
+      serveReady(h);
+      setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
+    }
+    assert.equal(h.game.snapshot().serveSide, 1);
+    h.game.serve({ brushY: -2 }, 1); assert.equal(h.game.snapshot().phase, 'ready');
+    h.advance(h.game.snapshot().serveDelayMs + 1); h.step(1);
+    h.game.serve({ brushY: -2 }, 1);
+    assert.equal(h.game.snapshot().phase, 'playing'); assert.ok(h.game.snapshot().ball.spinX > 0);
+  } finally { h.close(); }
+});
+
+test('practice AI also respects the point break and serve protection', () => {
+  const h = harness('practice');
+  try {
+    for (let i = 0; i < 2; i++) {
+      serveReady(h);
+      setIncoming(h, { x: 120, y: 500, height: -0.72, vh: -2, lastHitter: 0, receiverBounces: 0 }); h.step(16);
+    }
+    assert.equal(h.game.snapshot().serveSide, 1);
+    h.settle(2400); assert.equal(h.game.snapshot().phase, 'ready');
+    h.settle(500); assert.equal(h.game.snapshot().phase, 'playing');
   } finally { h.close(); }
 });

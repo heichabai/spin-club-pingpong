@@ -19,9 +19,11 @@ try {
  await until(()=>received.filter(x=>x.role==='host'&&x.type==='input').length===30);
  const duration=performance.now()-start;
  assert.ok(duration<1000,`relay unexpectedly slow: ${duration}`);
- host.send({type:'state',state:{ball:{x:500,y:400}}});guest.send({type:'serve',gesture:{brushY:-2}});
+ host.send({type:'state',state:{phase:'ready',serveDelayMs:1000,pointDelayMs:1500,ball:{x:500,y:400}}});guest.send({type:'serve',gesture:{brushY:-2}});
  await until(()=>received.some(x=>x.role==='guest'&&x.type==='state')&&received.some(x=>x.role==='host'&&x.type==='serve'));
  await until(()=>guest.reliable.length===0);
+ const readyState=received.find(x=>x.role==='guest'&&x.type==='state').state;
+ assert.equal(readyState.serveDelayMs,1000);assert.equal(readyState.pointDelayMs,1500,'both ready timers must survive the real relay');
  assert.equal(received.filter(x=>x.type==='serve').length,1,'commands must not be duplicated across socket and polling');
  assert.deepEqual(received.find(x=>x.role==='host'&&x.type==='serve').gesture,{brushY:-2},'serve brush must travel in the reliable command, independently of motion updates');
  // A burst must converge to its newest position without losing a command
